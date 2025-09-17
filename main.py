@@ -1,8 +1,10 @@
 import os
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from googleapiclient.discovery import build
+import requests
+from bs4 import BeautifulSoup
 
 # Load environment variables from .env file
 load_dotenv()
@@ -23,9 +25,11 @@ app = FastAPI(
 class SearchRequest(BaseModel):
     query: str
     lang_code: str = 'en' # Default to English if not provided
+    num: int = Field(..., ge=1, le=10, description="Number of results to return (1-10)")
+    full_text: bool  # Optional: fetch full page text
 
 # --- Helper Function for Google Search ---
-def perform_google_search(query: str, lang_code: str):
+def perform_google_search(query: str, lang_code: str, num: int, full_text: bool):
     """
     Performs a Google Custom Search with a specified query and language.
     """
@@ -38,19 +42,29 @@ def perform_google_search(query: str, lang_code: str):
             q=query,
             cx=GOOGLE_CSE_ID,
             lr=f"lang_{lang_code}", # Language restriction
-            num=5  # Fetch top 5 results
+            num=num  # Use the provided count
         ).execute()
 
         # Extract and format the search results
         if 'items' in result:
-            formatted_results = [
-                {
+            formatted_results = []
+            for item in result['items']:
+                result_dict = {
                     "title": item.get('title'),
                     "link": item.get('link'),
                     "snippet": item.get('snippet')
                 }
-                for item in result['items']
-            ]
+                if full_text:
+                    try:
+                        response = requests.get(item.get('link'), timeout=5)
+                        soup = BeautifulSoup(response.content, 'html.parser')
+                        # Extract text from <p> tags or body, limit to ~1000 chars
+                        paragraphs = soup.find_all('p')
+                        full_content = ' '.join([p.get_text() for p in paragraphs])[:1000]
+                        result_dict["full_text"] = full_content
+                    except Exception as e:
+                        result_dict["full_text"] = f"Error fetching text: {str(e)}"
+                formatted_results.append(result_dict)
             return formatted_results
         else:
             return []
@@ -73,7 +87,7 @@ def search(request: SearchRequest):
     if not GOOGLE_API_KEY or not GOOGLE_CSE_ID:
         raise HTTPException(status_code=500, detail="Server is not configured with Google API credentials.")
 
-    search_results = perform_google_search(query=request.query, lang_code=request.lang_code)
+    search_results = perform_google_search(query=request.query, lang_code=request.lang_code, num=request.num, full_text=request.full_text)
     
     if not search_results:
         return {"message": "No results found.", "results": []}
