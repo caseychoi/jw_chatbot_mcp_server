@@ -48,6 +48,7 @@ def perform_google_search(query: str, lang_code: str, num: int, full_text: bool)
         # Extract and format the search results
         if 'items' in result:
             formatted_results = []
+            
             for item in result['items']:
                 result_dict = {
                     "title": item.get('title'),
